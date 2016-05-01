@@ -6,6 +6,7 @@ package trivialt
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net"
 	"strconv"
@@ -55,7 +56,7 @@ func newConn(udpNet string, mode transferMode, addr *net.UDPAddr) (*conn, error)
 	return c, nil
 }
 
-func newSinglePortConn(addr *net.UDPAddr) *conn {
+func newSinglePortConn(addr *net.UDPAddr, netConn *net.UDPConn, reqChan chan []byte) *conn {
 	return &conn{
 		log:        newLogger(addr.String()),
 		remoteAddr: addr,
@@ -64,6 +65,8 @@ func newSinglePortConn(addr *net.UDPAddr) *conn {
 		windowsize: defaultWindowsize,
 		retransmit: defaultRetransmit,
 		buf:        make([]byte, 4+defaultBlksize), // +4 for headers
+		reqChan:    reqChan,
+		netConn:    netConn,
 	}
 }
 
@@ -776,9 +779,15 @@ func (c *conn) remoteError() error {
 // readFromNet reads from netConn into b.
 func (c *conn) readFromNet(b []byte) (int, net.Addr, error) {
 	if c.reqChan != nil {
-		data := <-c.reqChan
-		n := copy(b, data)
-		return n, nil, nil
+		// Single port mode
+		select {
+		case data := <-c.reqChan:
+			n := copy(b, data)
+			return n, nil, nil
+		case <-time.After(c.timeout):
+			return 0, nil, errors.New("timeout reading from channel")
+		}
+
 	}
 
 	if err := c.netConn.SetReadDeadline(time.Now().Add(c.timeout)); err != nil {

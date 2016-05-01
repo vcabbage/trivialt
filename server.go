@@ -106,7 +106,7 @@ func (s *Server) Serve(conn *net.UDPConn) error {
 
 	s.conn = conn
 
-	buf := make([]byte, 1024)
+	buf := make([]byte, 65536)
 	for {
 		numBytes, addr, err := conn.ReadFromUDP(buf)
 		if err != nil {
@@ -115,9 +115,9 @@ func (s *Server) Serve(conn *net.UDPConn) error {
 			}
 			return wrapError(err, "reading from conn")
 		}
-		bufCopy := make([]byte, numBytes)
-		copy(bufCopy, buf)
-		go s.dispatchRequest(addr, bufCopy)
+		dg := datagram{buf: make([]byte, numBytes)}
+		dg.offset = copy(dg.buf, buf[:numBytes])
+		go s.dispatchRequest(addr, &dg)
 	}
 }
 
@@ -130,14 +130,10 @@ func (s *Server) Close() error {
 // dispatchRequest parses incoming requests and executes the corresponding
 // handler, if one is registered. If a handler is not registered the server
 // sends an error to the client.
-func (s *Server) dispatchRequest(addr *net.UDPAddr, b []byte) {
-	var dg datagram
+func (s *Server) dispatchRequest(addr *net.UDPAddr, dg *datagram) {
 	var c *conn
 	var err error
-	dg.setBytes(b)
-
 	// Validate request datagram
-	dg.setBytes(b)
 	if err := dg.validate(); err != nil {
 		s.log.debug("Error decoding new request: %v", err)
 		return
@@ -154,34 +150,26 @@ func (s *Server) dispatchRequest(addr *net.UDPAddr, b []byte) {
 		}
 
 		if s.singlePort {
-			c = newSinglePortConn(addr)
-			c.rx = dg
-
-			c.reqChan = s.mgr.New(addr)
-			c.netConn = s.conn
+			c = newSinglePortConn(addr, s.conn, s.mgr.New(addr))
+			defer s.mgr.Remove(addr)
 		} else {
-			c, err = newConn(s.net, "", addr) // Use empty mode until request has been parsed.
+			c, err = newConn(s.net, dg.mode(), addr) // Use empty mode until request has been parsed.
 			if err != nil {
 				s.log.err("Received error opening connection for new request: %v", err)
 				return
 			}
-			c.rx = dg
-			// Set retransmit
-			c.retransmit = s.retransmit
-			// Set mode from request
-			c.mode = c.rx.mode()
 		}
 		defer errorDefer(c.Close, s.log, "error closing network connection in dispath")
+
+		c.rx = *dg
+		// Set retransmit
+		c.retransmit = s.retransmit
 
 		// Create request
 		w := &readRequest{conn: c, name: c.rx.filename()}
 
 		// execute handler
 		s.rh.ServeTFTP(w)
-
-		if s.singlePort {
-			s.mgr.Remove(addr)
-		}
 	case opCodeWRQ:
 		// Check for handler
 		if s.wh == nil {
@@ -191,26 +179,20 @@ func (s *Server) dispatchRequest(addr *net.UDPAddr, b []byte) {
 		}
 
 		if s.singlePort {
-			c = newSinglePortConn(addr)
-			c.rx = dg
-
-			c.reqChan = s.mgr.New(addr)
-			c.netConn = s.conn
+			c = newSinglePortConn(addr, s.conn, s.mgr.New(addr))
+			defer s.mgr.Remove(addr)
 		} else {
-			c, err = newConn(s.net, "", addr) // Use empty mode until request has been parsed.
+			c, err = newConn(s.net, dg.mode(), addr)
 			if err != nil {
 				s.log.err("Received error opening connection for new request: %v", err)
 				return
 			}
-			c.rx = dg
-			// Set retransmit
-			c.retransmit = s.retransmit
-			// Set mode from request
-			c.mode = c.rx.mode()
 		}
 		defer errorDefer(c.Close, s.log, "error closing network connection in dispath")
 
-		c.rx = dg
+		c.rx = *dg
+		// Set retransmit
+		c.retransmit = s.retransmit
 
 		// Create request
 		w := &writeRequest{conn: c, name: c.rx.filename()}
@@ -222,19 +204,24 @@ func (s *Server) dispatchRequest(addr *net.UDPAddr, b []byte) {
 		}
 
 		s.wh.ReceiveTFTP(w)
-
-		if s.singlePort {
-			s.mgr.Remove(addr)
-		}
 	default:
 		if s.singlePort {
 			if reqChan, ok := s.mgr.Get(addr); ok {
-				reqChan <- b
+				reqChan <- dg.buf
 				return
 			}
+
+			// RFC1350:
+			// "If a source TID does not match, the packet should be
+			// discarded as erroneously sent from somewhere else.  An error packet
+			// should be sent to the source of the incorrect packet, while not
+			// disturbing the transfer."
+			dg.writeError(ErrCodeUnknownTransferID, "Unexpected TID")
+			// Don't care about an error here, just a courtesy
+			_, _ = s.conn.WriteTo(dg.bytes(), addr)
 		}
 
-		s.log.debug("Unexpected Request")
+		s.log.debug("Unexpected datagram: %s", dg)
 	}
 }
 
