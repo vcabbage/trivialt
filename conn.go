@@ -87,8 +87,11 @@ func newConnFromHost(udpNet string, mode transferMode, host string) (*conn, erro
 type conn struct {
 	log        *logger
 	netConn    *net.UDPConn // Underlying network connection
-	reqChan    chan []byte
-	remoteAddr net.Addr // Address of the remote server or client
+	remoteAddr net.Addr     // Address of the remote server or client
+
+	// Single Port Mode
+	reqChan chan []byte
+	timer   *time.Timer
 
 	// Transfer type
 	isClient bool // Whether or not we're the client, gets set by sendRequest
@@ -773,13 +776,20 @@ func (c *conn) remoteError() error {
 // readFromNet reads from netConn into b.
 func (c *conn) readFromNet() (net.Addr, error) {
 	if c.reqChan != nil {
+		// Setup timer
+		if c.timer == nil {
+			c.timer = time.NewTimer(c.timeout)
+		} else {
+			c.timer.Reset(c.timeout)
+		}
+
 		// Single port mode
 		select {
 		case data := <-c.reqChan:
 			n := copy(c.rx.buf, data)
 			c.rx.offset = n
 			return nil, nil
-		case <-time.After(c.timeout):
+		case <-c.timer.C:
 			return nil, errors.New("timeout reading from channel")
 		}
 
