@@ -228,15 +228,12 @@ func (c *conn) sendRequest() error {
 
 	// Receive response
 	for retries := 0; ; {
-		n, addr, err := c.readFromNet(c.buf)
+		addr, err := c.readFromNet()
 		if err == nil {
 			if c.reqChan == nil {
 				// Update address
 				c.remoteAddr = addr
 			}
-
-			// Set rx bytes
-			c.rx.setBytes(c.buf[:n])
 			break
 		}
 
@@ -489,9 +486,8 @@ func (c *conn) read(p []byte) (int, error) {
 func (c *conn) readData() error {
 	for retries := 0; ; {
 		c.log.trace("Waiting for DATA from %s\n", c.remoteAddr)
-		n, _, err := c.readFromNet(c.buf)
+		_, err := c.readFromNet()
 		if err == nil {
-			c.rx.setBytes(c.buf[:n])
 			break
 		}
 
@@ -715,7 +711,7 @@ func (c *conn) sendAck(block uint16) error {
 func (c *conn) getAck() error {
 	for {
 		c.log.trace("Waiting for ACK from %s\n", c.remoteAddr)
-		numBytes, sAddr, err := c.readFromNet(c.buf)
+		sAddr, err := c.readFromNet()
 		if err != nil {
 			return wrapError(err, "network read failed")
 		}
@@ -738,8 +734,6 @@ func (c *conn) getAck() error {
 
 			continue // Read another datagram
 		}
-
-		c.rx.setBytes(c.buf[:numBytes])
 		break
 	}
 
@@ -777,23 +771,26 @@ func (c *conn) remoteError() error {
 }
 
 // readFromNet reads from netConn into b.
-func (c *conn) readFromNet(b []byte) (int, net.Addr, error) {
+func (c *conn) readFromNet() (net.Addr, error) {
 	if c.reqChan != nil {
 		// Single port mode
 		select {
 		case data := <-c.reqChan:
-			n := copy(b, data)
-			return n, nil, nil
+			n := copy(c.rx.buf, data)
+			c.rx.offset = n
+			return nil, nil
 		case <-time.After(c.timeout):
-			return 0, nil, errors.New("timeout reading from channel")
+			return nil, errors.New("timeout reading from channel")
 		}
 
 	}
 
 	if err := c.netConn.SetReadDeadline(time.Now().Add(c.timeout)); err != nil {
-		return 0, nil, wrapError(err, "setting network read deadline")
+		return nil, wrapError(err, "setting network read deadline")
 	}
-	return c.netConn.ReadFrom(b)
+	n, addr, err := c.netConn.ReadFrom(c.rx.buf)
+	c.rx.offset = n
+	return addr, err
 }
 
 // writeToNet writes tx to netConn.
