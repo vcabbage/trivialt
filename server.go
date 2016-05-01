@@ -106,7 +106,7 @@ func (s *Server) Serve(conn *net.UDPConn) error {
 
 	s.conn = conn
 
-	buf := make([]byte, 65536)
+	buf := make([]byte, 65536) // Largest possible TFTP datagram
 	for {
 		numBytes, addr, err := conn.ReadFromUDP(buf)
 		if err != nil {
@@ -115,9 +115,19 @@ func (s *Server) Serve(conn *net.UDPConn) error {
 			}
 			return wrapError(err, "reading from conn")
 		}
-		dg := datagram{buf: make([]byte, numBytes)}
-		dg.offset = copy(dg.buf, buf[:numBytes])
-		go s.dispatchRequest(addr, &dg)
+
+		// Make a copy of the recieved data
+		b := make([]byte, numBytes)
+		copy(b, buf)
+
+		switch buf[1] {
+		case 1: //RRQ
+			go s.dispatchReadRequest(addr, b)
+		case 2: //WRQ
+			go s.dispatchWriteRequest(addr, b)
+		default:
+			go s.demuxToConn(addr, b)
+		}
 	}
 }
 
@@ -127,102 +137,118 @@ func (s *Server) Close() error {
 	return s.conn.Close()
 }
 
-// dispatchRequest parses incoming requests and executes the corresponding
-// handler, if one is registered. If a handler is not registered the server
-// sends an error to the client.
-func (s *Server) dispatchRequest(addr *net.UDPAddr, dg *datagram) {
+// dispatchReadRequest dispatches the read handler, if it is registered.
+// If a handler is not registered the server sends an error to the client.
+func (s *Server) dispatchReadRequest(addr *net.UDPAddr, buf []byte) {
+	// Check for handler
+	if s.rh == nil {
+		s.log.debug("No read handler registered.")
+		var err datagram
+		err.writeError(ErrCodeIllegalOperation, "Server does not support read requests.")
+		_, _ = s.conn.WriteTo(err.bytes(), addr) // Ignore error
+		return
+	}
+
+	c, closer, err := s.newConn(addr, buf)
+	if err != nil {
+		return
+	}
+	defer errorDefer(closer, s.log, "error closing network connection in dispath")
+
+	s.log.debug("New request from %v: %s", addr, c.rx)
+
+	// Create request
+	w := &readRequest{conn: c, name: c.rx.filename()}
+
+	// execute handler
+	s.rh.ServeTFTP(w)
+}
+
+// dispatchWriteRequest dispatches the read handler, if it is registered.
+// If a handler is not registered the server sends an error to the client.
+func (s *Server) dispatchWriteRequest(addr *net.UDPAddr, buf []byte) {
+	// Check for handler
+	if s.wh == nil {
+		s.log.debug("No write handler registered.")
+		var err datagram
+		err.writeError(ErrCodeIllegalOperation, "Server does not support write requests.")
+		_, _ = s.conn.WriteTo(err.bytes(), addr) // Ignore error
+		return
+	}
+
+	c, closer, err := s.newConn(addr, buf)
+	if err != nil {
+		return
+	}
+	defer errorDefer(closer, s.log, "error closing network connection in dispath")
+
+	s.log.debug("New request from %v: %s", addr, c.rx)
+
+	// Create request
+	w := &writeRequest{conn: c, name: c.rx.filename()}
+
+	// parse options to get size
+	c.log.trace("performing write setup")
+	if err := c.readSetup(); err != nil {
+		c.err = err
+	}
+
+	s.wh.ReceiveTFTP(w)
+}
+
+func (s *Server) demuxToConn(addr *net.UDPAddr, buf []byte) {
+	if s.singlePort {
+		if reqChan, ok := s.mgr.Get(addr); ok {
+			reqChan <- buf
+			return
+		}
+	}
+
+	// RFC1350:
+	// "If a source TID does not match, the packet should be
+	// discarded as erroneously sent from somewhere else.  An error packet
+	// should be sent to the source of the incorrect packet, while not
+	// disturbing the transfer."
+	dg := datagram{}
+	dg.writeError(ErrCodeUnknownTransferID, "Unexpected TID")
+	// Don't care about an error here, just a courtesy
+	_, _ = s.conn.WriteTo(dg.bytes(), addr)
+	s.log.debug("Unexpected datagram: %s", dg)
+}
+
+func (s *Server) newConn(addr *net.UDPAddr, buf []byte) (*conn, func() error, error) {
 	var c *conn
 	var err error
+	var dg datagram
+
+	dg.setBytes(buf)
+
 	// Validate request datagram
 	if err := dg.validate(); err != nil {
 		s.log.debug("Error decoding new request: %v", err)
-		return
+		return nil, nil, err
 	}
-	s.log.debug("New request from %v: %s", addr, dg)
 
-	switch dg.opcode() {
-	case opCodeRRQ:
-		// Check for handler
-		if s.rh == nil {
-			s.log.debug("No read handler registered.")
-			c.sendError(ErrCodeIllegalOperation, "Server does not support read requests.")
-			return
+	if s.singlePort {
+		c = newSinglePortConn(addr, s.conn, s.mgr.New(addr))
+	} else {
+		c, err = newConn(s.net, dg.mode(), addr) // Use empty mode until request has been parsed.
+		if err != nil {
+			s.log.err("Received error opening connection for new request: %v", err)
+			return nil, nil, err
 		}
-
-		if s.singlePort {
-			c = newSinglePortConn(addr, s.conn, s.mgr.New(addr))
-			defer s.mgr.Remove(addr)
-		} else {
-			c, err = newConn(s.net, dg.mode(), addr) // Use empty mode until request has been parsed.
-			if err != nil {
-				s.log.err("Received error opening connection for new request: %v", err)
-				return
-			}
-		}
-		defer errorDefer(c.Close, s.log, "error closing network connection in dispath")
-
-		c.rx = *dg
-		// Set retransmit
-		c.retransmit = s.retransmit
-
-		// Create request
-		w := &readRequest{conn: c, name: c.rx.filename()}
-
-		// execute handler
-		s.rh.ServeTFTP(w)
-	case opCodeWRQ:
-		// Check for handler
-		if s.wh == nil {
-			s.log.debug("No write handler registered.")
-			c.sendError(ErrCodeIllegalOperation, "Server does not support write requests.")
-			return
-		}
-
-		if s.singlePort {
-			c = newSinglePortConn(addr, s.conn, s.mgr.New(addr))
-			defer s.mgr.Remove(addr)
-		} else {
-			c, err = newConn(s.net, dg.mode(), addr)
-			if err != nil {
-				s.log.err("Received error opening connection for new request: %v", err)
-				return
-			}
-		}
-		defer errorDefer(c.Close, s.log, "error closing network connection in dispath")
-
-		c.rx = *dg
-		// Set retransmit
-		c.retransmit = s.retransmit
-
-		// Create request
-		w := &writeRequest{conn: c, name: c.rx.filename()}
-
-		// parse options to get size
-		c.log.trace("performing write setup")
-		if err := c.readSetup(); err != nil {
-			c.err = err
-		}
-
-		s.wh.ReceiveTFTP(w)
-	default:
-		if s.singlePort {
-			if reqChan, ok := s.mgr.Get(addr); ok {
-				reqChan <- dg.buf
-				return
-			}
-
-			// RFC1350:
-			// "If a source TID does not match, the packet should be
-			// discarded as erroneously sent from somewhere else.  An error packet
-			// should be sent to the source of the incorrect packet, while not
-			// disturbing the transfer."
-			dg.writeError(ErrCodeUnknownTransferID, "Unexpected TID")
-			// Don't care about an error here, just a courtesy
-			_, _ = s.conn.WriteTo(dg.bytes(), addr)
-		}
-
-		s.log.debug("Unexpected datagram: %s", dg)
 	}
+
+	c.rx = dg
+	// Set retransmit
+	c.retransmit = s.retransmit
+
+	closer := func() error {
+		s.mgr.Remove(addr)
+		return c.Close()
+	}
+
+	return c, closer, nil
 }
 
 // ListenAndServe starts a configured server.

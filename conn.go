@@ -785,9 +785,8 @@ func (c *conn) readFromNet() (net.Addr, error) {
 
 		// Single port mode
 		select {
-		case data := <-c.reqChan:
-			n := copy(c.rx.buf, data)
-			c.rx.offset = n
+		case c.rx.buf = <-c.reqChan:
+			c.rx.offset = len(c.rx.buf)
 			return nil, nil
 		case <-c.timer.C:
 			return nil, errors.New("timeout reading from channel")
