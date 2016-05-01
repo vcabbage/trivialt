@@ -52,6 +52,7 @@ func newConn(udpNet string, mode transferMode, addr *net.UDPAddr) (*conn, error)
 		mode:       mode,
 		buf:        make([]byte, 4+defaultBlksize), // +4 for headers
 	}
+	c.rx.buf = make([]byte, 4+defaultBlksize) // +4 for headers
 
 	return c, nil
 }
@@ -421,7 +422,7 @@ func (c *conn) readSetup() error {
 	// Set buf size
 	needed := int(c.blksize + 4)
 	if len(c.buf) != needed {
-		c.buf = make([]byte, needed)
+		c.rx.buf = make([]byte, needed)
 	}
 
 	// If there we're not options negotiated, send ACK
@@ -513,8 +514,6 @@ func (c *conn) readData() error {
 		return wrapError(err, "validating read data")
 	}
 
-	c.log.trace("Received block %d\n", c.rx.block())
-
 	// Check for opcode
 	switch op := c.rx.opcode(); op {
 	case opCodeDATA:
@@ -525,6 +524,8 @@ func (c *conn) readData() error {
 		return wrapError(&errUnexpectedDatagram{dg: c.rx.String()}, "read data response")
 	}
 
+	c.log.trace("Received block %d\n", c.rx.block())
+
 	return nil
 }
 
@@ -533,16 +534,20 @@ func (c *conn) ackData() error {
 	switch diff := c.rx.block() - c.block; {
 	case diff == 1:
 		// Next block as expected; increment window and block
+		c.log.trace("ackData diff: %d, current block: %d, rx block %d", diff, c.block, c.rx.block())
 		c.block++
 		c.window++
 		c.catchup = false
 	case diff == 0:
 		// Same block again, ignore
+		c.log.trace("ackData diff: %d, current block: %d, rx block %d", diff, c.block, c.rx.block())
 		return errBlockSequence
 	case diff > c.windowsize:
+		c.log.trace("ackData diff: %d, current block: %d, rx block %d", diff, c.block, c.rx.block())
 		// Sender is behind, missed ACK? Wait for catchup
 		return errBlockSequence
 	case diff <= c.windowsize:
+		c.log.trace("ackData diff: %d, current block: %d, rx block %d", diff, c.block, c.rx.block())
 		// We missed blocks
 		if c.catchup {
 			// Ignore, we need to catchup with server
@@ -560,6 +565,7 @@ func (c *conn) ackData() error {
 
 	// If we've reached the windowsize, send ACK and reset window
 	if c.window >= c.windowsize || c.rx.offset < int(c.blksize) {
+		c.log.trace("window %d, windowsize: %d, offset: %d, blksize: %d", c.window, c.windowsize, c.rx.offset, c.blksize)
 		c.window = 0
 		c.log.trace("Window %d reached, sending ACK for %d\n", c.windowsize, c.block)
 		if err := c.sendAck(c.block); err == nil {
@@ -609,6 +615,15 @@ func (c *conn) Close() (err error) {
 
 			err := c.getAck()
 			if err == nil {
+				// Recheck data, window could have been missed
+				if c.txBuf.Len() >= int(c.blksize) {
+					c.log.trace("%d", c.txBuf.Len())
+					c.write([]byte{})
+					continue
+				}
+				if c.txBuf.Len() > 0 {
+					continue
+				}
 				break
 			}
 
@@ -758,6 +773,10 @@ func (c *conn) getAck() error {
 
 	// Check block #
 	if rxBlock := c.rx.block(); rxBlock != c.block {
+		if rxBlock > c.block {
+			// Out of order ACKs can cause this scenario, ignore the ACK
+			return nil
+		}
 		c.log.debug("Expected ACK for block %d, got %d. Resetting to block %d.", c.block, rxBlock, rxBlock)
 		c.txBuf.UnreadSlots(int(c.block - rxBlock))
 		c.block = rxBlock
@@ -791,7 +810,6 @@ func (c *conn) readFromNet() (net.Addr, error) {
 		case <-c.timer.C:
 			return nil, errors.New("timeout reading from channel")
 		}
-
 	}
 
 	if err := c.netConn.SetReadDeadline(time.Now().Add(c.timeout)); err != nil {

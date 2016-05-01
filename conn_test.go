@@ -225,6 +225,19 @@ func TestConn_getAck(t *testing.T) {
 			expectedRingBuf: -4,
 			expectedError:   "^$",
 		},
+		"incorrect block, ahead": {
+			timeout: time.Second * 1,
+			block:   18,
+			window:  5,
+			connFunc: func(label string, conn *net.UDPConn, sAddr *net.UDPAddr) {
+				tDG.writeAck(20)
+				testWriteConn(t, conn, sAddr, tDG)
+			},
+
+			expectedBlock:  18,
+			expectedWindow: 5,
+			expectedError:  "^$",
+		},
 	}
 
 	for label, c := range cases {
@@ -233,7 +246,7 @@ func TestConn_getAck(t *testing.T) {
 		tConn.timeout = c.timeout
 		tConn.block = c.block
 		tConn.window = c.window
-		tConn.buf = make([]byte, 516)
+		tConn.rx.buf = make([]byte, 516)
 		tConn.txBuf = newRingBuffer(100, 100)
 
 		var wg sync.WaitGroup

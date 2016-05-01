@@ -244,8 +244,9 @@ func (s *Server) newConn(addr *net.UDPAddr, buf []byte) (*conn, func() error, er
 	c.retransmit = s.retransmit
 
 	closer := func() error {
+		err := c.Close()
 		s.mgr.Remove(addr)
-		return c.Close()
+		return err
 	}
 
 	return c, closer, nil
