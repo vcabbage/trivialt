@@ -55,6 +55,18 @@ func newConn(udpNet string, mode transferMode, addr *net.UDPAddr) (*conn, error)
 	return c, nil
 }
 
+func newSinglePortConn(addr *net.UDPAddr) *conn {
+	return &conn{
+		log:        newLogger(addr.String()),
+		remoteAddr: addr,
+		blksize:    defaultBlksize,
+		timeout:    defaultTimeout,
+		windowsize: defaultWindowsize,
+		retransmit: defaultRetransmit,
+		buf:        make([]byte, 4+defaultBlksize), // +4 for headers
+	}
+}
+
 // newConnFromHost wraps newConn and looks up the target's address from a string
 //
 // This function is used by Client
@@ -72,7 +84,8 @@ func newConnFromHost(udpNet string, mode transferMode, host string) (*conn, erro
 type conn struct {
 	log        *logger
 	netConn    *net.UDPConn // Underlying network connection
-	remoteAddr net.Addr     // Address of the remote server or client
+	reqChan    chan []byte
+	remoteAddr net.Addr // Address of the remote server or client
 
 	// Transfer type
 	isClient bool // Whether or not we're the client, gets set by sendRequest
@@ -214,8 +227,10 @@ func (c *conn) sendRequest() error {
 	for retries := 0; ; {
 		n, addr, err := c.readFromNet(c.buf)
 		if err == nil {
-			// Update address
-			c.remoteAddr = addr
+			if c.reqChan == nil {
+				// Update address
+				c.remoteAddr = addr
+			}
 
 			// Set rx bytes
 			c.rx.setBytes(c.buf[:n])
@@ -301,7 +316,6 @@ func (c *conn) write(p []byte) (int, error) {
 			return 0, wrapError(err, "parsing options before write")
 		}
 	}
-
 	// Copy to buffer
 	read, err := c.txBuf.Write(p)
 	if err != nil {
@@ -558,17 +572,19 @@ func (c *conn) ackData() error {
 func (c *conn) Close() (err error) {
 	c.log.debug("Closing connection to %s\n", c.remoteAddr)
 
-	defer func() {
-		// Close network even if another error occurs
-		//
-		cErr := c.netConn.Close()
-		if cErr != nil {
-			c.log.debug("error closing network connection:", cErr)
-		}
-		if err == nil {
-			err = cErr
-		}
-	}()
+	if c.reqChan == nil {
+		defer func() {
+			// Close network even if another error occurs
+			//
+			cErr := c.netConn.Close()
+			if cErr != nil {
+				c.log.debug("error closing network connection:", cErr)
+			}
+			if err == nil {
+				err = cErr
+			}
+		}()
+	}
 
 	// Can't write if an error has been sent/received
 	if c.err != nil {
@@ -708,7 +724,7 @@ func (c *conn) getAck() error {
 		// discarded as erroneously sent from somewhere else.  An error packet
 		// should be sent to the source of the incorrect packet, while not
 		// disturbing the transfer."
-		if sAddr.String() != c.remoteAddr.String() {
+		if c.reqChan == nil && sAddr.String() != c.remoteAddr.String() {
 			c.log.err("Received unexpected datagram from %v, expected %v\n", sAddr, c.remoteAddr)
 			go func() {
 				var err datagram
@@ -759,6 +775,12 @@ func (c *conn) remoteError() error {
 
 // readFromNet reads from netConn into b.
 func (c *conn) readFromNet(b []byte) (int, net.Addr, error) {
+	if c.reqChan != nil {
+		data := <-c.reqChan
+		n := copy(b, data)
+		return n, nil, nil
+	}
+
 	if err := c.netConn.SetReadDeadline(time.Now().Add(c.timeout)); err != nil {
 		return 0, nil, wrapError(err, "setting network read deadline")
 	}
