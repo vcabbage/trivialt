@@ -116,7 +116,7 @@ func (s *Server) Serve(conn *net.UDPConn) error {
 			return wrapError(err, "reading from conn")
 		}
 
-		// Make a copy of the recieved data
+		// Make a copy of the received data
 		b := make([]byte, numBytes)
 		copy(b, buf)
 
@@ -301,7 +301,7 @@ func ServerRetransmit(i int) ServerOpt {
 }
 
 // ServerSinglePort enables the server to service all requests via a single port rather
-// than the standard TFTP behavior of each client communicating on a seperate port.
+// than the standard TFTP behavior of each client communicating on a separate port.
 //
 // This is an experimental feature.
 //
