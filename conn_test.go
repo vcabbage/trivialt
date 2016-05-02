@@ -655,8 +655,8 @@ func TestConn_sendReadRequest(t *testing.T) {
 				t.Errorf("%s: Expected tsize to be %d, but it was %d", label, *c.expectedTsize, *tConn.tsize)
 			}
 		}
-		if len(tConn.buf) != c.expectedBufLen {
-			t.Errorf("%s: Expected buf len to be %d, but it was %d", label, c.expectedBufLen, len(tConn.buf))
+		if len(tConn.rx.buf) != c.expectedBufLen {
+			t.Errorf("%s: Expected buf len to be %d, but it was %d", label, c.expectedBufLen, len(tConn.rx.buf))
 		}
 	}
 }

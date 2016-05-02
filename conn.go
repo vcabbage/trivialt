@@ -421,7 +421,7 @@ func (c *conn) readSetup() error {
 
 	// Set buf size
 	needed := int(c.blksize + 4)
-	if len(c.buf) != needed {
+	if len(c.rx.buf) != needed {
 		c.rx.buf = make([]byte, needed)
 	}
 
@@ -601,6 +601,7 @@ func (c *conn) Close() (err error) {
 
 	// netasciiEnc needs to be flushed if it's in use
 	if c.netasciiEnc != nil {
+		c.log.trace("Flushing netascii encoder")
 		if err := c.netasciiEnc.Flush(); err != nil {
 			return wrapError(err, "flushing netascii encoder before Close")
 		}

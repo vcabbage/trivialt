@@ -245,7 +245,9 @@ func (s *Server) newConn(addr *net.UDPAddr, buf []byte) (*conn, func() error, er
 
 	closer := func() error {
 		err := c.Close()
-		s.mgr.Remove(addr)
+		if s.singlePort {
+			s.mgr.Remove(addr)
+		}
 		return err
 	}
 
