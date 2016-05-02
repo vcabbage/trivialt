@@ -21,6 +21,24 @@ trivialt is a cross-platform, concurrent TFTP server and client. It can be used 
 - [X] Transfer Size Option ([RFC 2349](https://tools.ietf.org/html/rfc2349))
 - [X] Windowsize Option ([RFC 7440](https://tools.ietf.org/html/rfc7440))
 
+### Unique Features
+
+- Single Port Mode
+
+    TL;DR: It allows TFTP to work through firewalls.
+
+    A standard TFTP server implementation receives requests on port 69 and allocates a new high port (over 1024) dedicated to that request.
+    In single port mode, trivialt receives and responds to requests on the same port. If are server is started on port 69, all communication will
+    be done on port 69.
+    
+    The primary use case of this feature is to play nicely with firewalls. Most firewalls will prevent the typical case where the server responds
+    back on a random port because they have no way of knowing that it is in response to a request that went out on port 69. In single port mode,
+    the firewall will see a request go out to a server on port 69 and that server respond back on the same port, which most firewalls will allow.
+    
+    Of course if the firewall in question is configured the block TFTP connections, this setting won't help you.
+    
+    Enable single port mode with the `--single-port` flag. This is currently marked experimental as is diverges from the TFTP standard.
+
 ## Installation
 
 If you have the Go toolchain installed you can simply `go get` the packages. This will download the source into your `$GOPATH` and install the binary to `$GOPATH/bin/trivialt`.
