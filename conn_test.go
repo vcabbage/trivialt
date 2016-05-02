@@ -82,7 +82,7 @@ func TestNewConn(t *testing.T) {
 		if conn.retransmit != 10 {
 			t.Errorf("%s: Expected retransmit to be default 1, but it was %d", label, conn.retransmit)
 		}
-		if len(conn.buf) != 516 {
+		if len(conn.rx.buf) != 516 {
 			t.Errorf("%s: Expected buf len to be default 516, but it was %d", label, len(conn.buf))
 		}
 	}

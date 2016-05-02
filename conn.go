@@ -50,14 +50,13 @@ func newConn(udpNet string, mode transferMode, addr *net.UDPAddr) (*conn, error)
 		windowsize: defaultWindowsize,
 		retransmit: defaultRetransmit,
 		mode:       mode,
-		buf:        make([]byte, 4+defaultBlksize), // +4 for headers
 	}
 	c.rx.buf = make([]byte, 4+defaultBlksize) // +4 for headers
 
 	return c, nil
 }
 
-func newSinglePortConn(addr *net.UDPAddr, netConn *net.UDPConn, reqChan chan []byte) *conn {
+func newSinglePortConn(addr *net.UDPAddr, mode transferMode, netConn *net.UDPConn, reqChan chan []byte) *conn {
 	return &conn{
 		log:        newLogger(addr.String()),
 		remoteAddr: addr,
@@ -65,6 +64,7 @@ func newSinglePortConn(addr *net.UDPAddr, netConn *net.UDPConn, reqChan chan []b
 		timeout:    defaultTimeout,
 		windowsize: defaultWindowsize,
 		retransmit: defaultRetransmit,
+		mode:       mode,
 		buf:        make([]byte, 4+defaultBlksize), // +4 for headers
 		reqChan:    reqChan,
 		netConn:    netConn,

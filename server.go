@@ -230,7 +230,7 @@ func (s *Server) newConn(addr *net.UDPAddr, buf []byte) (*conn, func() error, er
 	}
 
 	if s.singlePort {
-		c = newSinglePortConn(addr, s.conn, s.mgr.New(addr))
+		c = newSinglePortConn(addr, dg.mode(), s.conn, s.mgr.New(addr))
 	} else {
 		c, err = newConn(s.net, dg.mode(), addr) // Use empty mode until request has been parsed.
 		if err != nil {
