@@ -241,47 +241,49 @@ func TestConn_getAck(t *testing.T) {
 	}
 
 	for label, c := range cases {
-		tConn, sAddr, cNetConn, closer := testConns(t)
-		defer closer()
-		tConn.timeout = c.timeout
-		tConn.block = c.block
-		tConn.window = c.window
-		tConn.rx.buf = make([]byte, 516)
-		tConn.txBuf = newRingBuffer(100, 100)
+		func() {
+			tConn, sAddr, cNetConn, closer := testConns(t)
+			defer closer()
+			tConn.timeout = c.timeout
+			tConn.block = c.block
+			tConn.window = c.window
+			tConn.rx.buf = make([]byte, 516)
+			tConn.txBuf = newRingBuffer(100, 100)
 
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			c.connFunc(label, cNetConn, sAddr)
-			wg.Done()
-		}()
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				c.connFunc(label, cNetConn, sAddr)
+				wg.Done()
+			}()
 
-		err := tConn.getAck()
-		wg.Wait()
-		// Error
-		if err != nil {
-			if ok, _ := regexp.MatchString(c.expectedError, err.Error()); !ok {
-				t.Errorf("%s: expected error %q, got %q", label, c.expectedError, err.Error())
+			err := tConn.getAck()
+			wg.Wait()
+			// Error
+			if err != nil {
+				if ok, _ := regexp.MatchString(c.expectedError, err.Error()); !ok {
+					t.Errorf("%s: expected error %q, got %q", label, c.expectedError, err.Error())
+				}
 			}
-		}
-		if err != nil {
-			continue
-		}
+			if err != nil {
+				return
+			}
 
-		// Block number
-		if tConn.block != c.expectedBlock {
-			t.Errorf("%s: Expected block %d, got %d", label, c.expectedBlock, tConn.block)
-		}
+			// Block number
+			if tConn.block != c.expectedBlock {
+				t.Errorf("%s: Expected block %d, got %d", label, c.expectedBlock, tConn.block)
+			}
 
-		// Window number
-		if tConn.window != c.expectedWindow {
-			t.Errorf("%s: Expected window %d, got %d", label, c.expectedWindow, tConn.window)
-		}
+			// Window number
+			if tConn.window != c.expectedWindow {
+				t.Errorf("%s: Expected window %d, got %d", label, c.expectedWindow, tConn.window)
+			}
 
-		// ringBuf
-		if tConn.txBuf.current != c.expectedRingBuf {
-			t.Errorf("%s: Expected ringBuf current %d, got %d", label, c.expectedRingBuf, tConn.txBuf.current)
-		}
+			// ringBuf
+			if tConn.txBuf.current != c.expectedRingBuf {
+				t.Errorf("%s: Expected ringBuf current %d, got %d", label, c.expectedRingBuf, tConn.txBuf.current)
+			}
+		}()
 	}
 }
 
@@ -406,48 +408,50 @@ func TestConn_sendWriteRequest(t *testing.T) {
 	}
 
 	for label, c := range cases {
-		tConn, sAddr, cNetConn, closer := testConns(t)
-		defer closer()
-		tConn.timeout = c.timeout
+		func() {
+			tConn, sAddr, cNetConn, closer := testConns(t)
+			defer closer()
+			tConn.timeout = c.timeout
 
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			c.connFunc(label, cNetConn, sAddr)
-			wg.Done()
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				c.connFunc(label, cNetConn, sAddr)
+				wg.Done()
+			}()
+
+			err := tConn.sendWriteRequest("file", options{})
+			wg.Wait()
+			// Error
+			if err != nil {
+				if ok, _ := regexp.MatchString(c.expectedError, err.Error()); !ok {
+					t.Errorf("%s: expected error %q, got %q", label, c.expectedError, err.Error())
+				}
+			}
+			if err != nil {
+				return
+			}
+
+			if tConn.blksize != c.expectedBlksize {
+				t.Errorf("%s: Expected blocksize to be %d, but it was %d", label, c.expectedBlksize, tConn.blksize)
+			}
+			if tConn.timeout != c.expectedTimeout {
+				t.Errorf("%s: Expected timeout to be %s, but it was %s", label, c.expectedTimeout, tConn.timeout)
+			}
+			if tConn.windowsize != c.expectedWindowsize {
+				t.Errorf("%s: Expected window to be %d, but it was %d", label, c.expectedWindowsize, tConn.windowsize)
+			}
+			if tConn.tsize != c.expectedTsize {
+				if tConn.tsize == nil || c.expectedTsize == nil {
+					t.Errorf("%s: Expected tsize to be %d, but it was %d", label, c.expectedTsize, tConn.tsize)
+				} else if *tConn.tsize != *c.expectedTsize {
+					t.Errorf("%s: Expected tsize to be %d, but it was %d", label, *c.expectedTsize, *tConn.tsize)
+				}
+			}
+			if len(tConn.buf) != c.expectedBufLen {
+				t.Errorf("%s: Expected buf len to be %d, but it was %d", label, c.expectedBufLen, len(tConn.buf))
+			}
 		}()
-
-		err := tConn.sendWriteRequest("file", options{})
-		wg.Wait()
-		// Error
-		if err != nil {
-			if ok, _ := regexp.MatchString(c.expectedError, err.Error()); !ok {
-				t.Errorf("%s: expected error %q, got %q", label, c.expectedError, err.Error())
-			}
-		}
-		if err != nil {
-			continue
-		}
-
-		if tConn.blksize != c.expectedBlksize {
-			t.Errorf("%s: Expected blocksize to be %d, but it was %d", label, c.expectedBlksize, tConn.blksize)
-		}
-		if tConn.timeout != c.expectedTimeout {
-			t.Errorf("%s: Expected timeout to be %s, but it was %s", label, c.expectedTimeout, tConn.timeout)
-		}
-		if tConn.windowsize != c.expectedWindowsize {
-			t.Errorf("%s: Expected window to be %d, but it was %d", label, c.expectedWindowsize, tConn.windowsize)
-		}
-		if tConn.tsize != c.expectedTsize {
-			if tConn.tsize == nil || c.expectedTsize == nil {
-				t.Errorf("%s: Expected tsize to be %d, but it was %d", label, c.expectedTsize, tConn.tsize)
-			} else if *tConn.tsize != *c.expectedTsize {
-				t.Errorf("%s: Expected tsize to be %d, but it was %d", label, *c.expectedTsize, *tConn.tsize)
-			}
-		}
-		if len(tConn.buf) != c.expectedBufLen {
-			t.Errorf("%s: Expected buf len to be %d, but it was %d", label, c.expectedBufLen, len(tConn.buf))
-		}
 	}
 }
 
@@ -604,60 +608,62 @@ func TestConn_sendReadRequest(t *testing.T) {
 	}
 
 	for label, c := range cases {
-		tConn, sAddr, cNetConn, closer := testConns(t)
-		defer closer()
-		tConn.timeout = c.timeout
-		tConn.mode = c.mode
+		func() {
+			tConn, sAddr, cNetConn, closer := testConns(t)
+			defer closer()
+			tConn.timeout = c.timeout
+			tConn.mode = c.mode
 
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			c.connFunc(label, cNetConn, sAddr)
-			wg.Done()
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				c.connFunc(label, cNetConn, sAddr)
+				wg.Done()
+			}()
+
+			err := tConn.sendReadRequest("file", options{})
+			wg.Wait()
+			// Error
+			if err != nil {
+				if ok, _ := regexp.MatchString(c.expectedError, err.Error()); !ok {
+					t.Errorf("%s: expected error %q, got %q", label, c.expectedError, err.Error())
+				}
+			}
+			if err != nil {
+				return
+			}
+
+			// Flush buffer
+			if tConn.netasciiEnc != nil {
+				tConn.netasciiEnc.Flush()
+			}
+
+			if buf := tConn.rxBuf.String(); buf != c.expectedBuf {
+				t.Errorf("%s: Expected buf to contain %q, but it was %q", label, c.expectedBuf, buf)
+			}
+			if tConn.done != c.expectDone {
+				t.Errorf("%s: Expected done %t, but it wasn't", label, c.expectDone)
+			}
+			if tConn.blksize != c.expectedBlksize {
+				t.Errorf("%s: Expected blocksize to be %d, but it was %d", label, c.expectedBlksize, tConn.blksize)
+			}
+			if tConn.timeout != c.expectedTimeout {
+				t.Errorf("%s: Expected timeout to be %s, but it was %s", label, c.expectedTimeout, tConn.timeout)
+			}
+			if tConn.windowsize != c.expectedWindowsize {
+				t.Errorf("%s: Expected window to be %d, but it was %d", label, c.expectedWindowsize, tConn.windowsize)
+			}
+			if tConn.tsize != c.expectedTsize {
+				if tConn.tsize == nil || c.expectedTsize == nil {
+					t.Errorf("%s: Expected tsize to be %d, but it was %d", label, c.expectedTsize, tConn.tsize)
+				} else if *tConn.tsize != *c.expectedTsize {
+					t.Errorf("%s: Expected tsize to be %d, but it was %d", label, *c.expectedTsize, *tConn.tsize)
+				}
+			}
+			if len(tConn.rx.buf) != c.expectedBufLen {
+				t.Errorf("%s: Expected buf len to be %d, but it was %d", label, c.expectedBufLen, len(tConn.rx.buf))
+			}
 		}()
-
-		err := tConn.sendReadRequest("file", options{})
-		wg.Wait()
-		// Error
-		if err != nil {
-			if ok, _ := regexp.MatchString(c.expectedError, err.Error()); !ok {
-				t.Errorf("%s: expected error %q, got %q", label, c.expectedError, err.Error())
-			}
-		}
-		if err != nil {
-			continue
-		}
-
-		// Flush buffer
-		if tConn.netasciiEnc != nil {
-			tConn.netasciiEnc.Flush()
-		}
-
-		if buf := tConn.rxBuf.String(); buf != c.expectedBuf {
-			t.Errorf("%s: Expected buf to contain %q, but it was %q", label, c.expectedBuf, buf)
-		}
-		if tConn.done != c.expectDone {
-			t.Errorf("%s: Expected done %t, but it wasn't", label, c.expectDone)
-		}
-		if tConn.blksize != c.expectedBlksize {
-			t.Errorf("%s: Expected blocksize to be %d, but it was %d", label, c.expectedBlksize, tConn.blksize)
-		}
-		if tConn.timeout != c.expectedTimeout {
-			t.Errorf("%s: Expected timeout to be %s, but it was %s", label, c.expectedTimeout, tConn.timeout)
-		}
-		if tConn.windowsize != c.expectedWindowsize {
-			t.Errorf("%s: Expected window to be %d, but it was %d", label, c.expectedWindowsize, tConn.windowsize)
-		}
-		if tConn.tsize != c.expectedTsize {
-			if tConn.tsize == nil || c.expectedTsize == nil {
-				t.Errorf("%s: Expected tsize to be %d, but it was %d", label, c.expectedTsize, tConn.tsize)
-			} else if *tConn.tsize != *c.expectedTsize {
-				t.Errorf("%s: Expected tsize to be %d, but it was %d", label, *c.expectedTsize, *tConn.tsize)
-			}
-		}
-		if len(tConn.rx.buf) != c.expectedBufLen {
-			t.Errorf("%s: Expected buf len to be %d, but it was %d", label, c.expectedBufLen, len(tConn.rx.buf))
-		}
 	}
 }
 
@@ -740,42 +746,44 @@ func TestConn_readData(t *testing.T) {
 	}
 
 	for label, c := range cases {
-		tConn, sAddr, cNetConn, closer := testConns(t)
-		defer closer()
-		tConn.timeout = c.timeout
-		tConn.window = c.window
+		func() {
+			tConn, sAddr, cNetConn, closer := testConns(t)
+			defer closer()
+			tConn.timeout = c.timeout
+			tConn.window = c.window
 
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			c.connFunc(label, cNetConn, sAddr)
-			wg.Done()
-		}()
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				c.connFunc(label, cNetConn, sAddr)
+				wg.Done()
+			}()
 
-		err := tConn.readData()
-		wg.Wait()
-		// Error
-		if err != nil {
-			if ok, _ := regexp.MatchString(c.expectedError, err.Error()); !ok {
-				t.Errorf("%s: expected error %q, got %q", label, c.expectedError, err.Error())
+			err := tConn.readData()
+			wg.Wait()
+			// Error
+			if err != nil {
+				if ok, _ := regexp.MatchString(c.expectedError, err.Error()); !ok {
+					t.Errorf("%s: expected error %q, got %q", label, c.expectedError, err.Error())
+				}
+				return
 			}
-			continue
-		}
 
-		// Data
-		if string(tConn.rx.data()) != string(c.expectedData) {
-			// t.Errorf("%s: Expected data %q, got %q", label, string(c.expectedData), string(data))
-		}
+			// Data
+			if string(tConn.rx.data()) != string(c.expectedData) {
+				// t.Errorf("%s: Expected data %q, got %q", label, string(c.expectedData), string(data))
+			}
 
-		// Block number
-		if tConn.rx.block() != c.expectedBlock {
-			t.Errorf("%s: Expected block %d, got %d", label, c.expectedBlock, tConn.block)
-		}
+			// Block number
+			if tConn.rx.block() != c.expectedBlock {
+				t.Errorf("%s: Expected block %d, got %d", label, c.expectedBlock, tConn.block)
+			}
 
-		// Window number
-		if tConn.window != c.expectedWindow {
-			t.Errorf("%s: Expected window %d, got %d", label, c.expectedWindow, tConn.window)
-		}
+			// Window number
+			if tConn.window != c.expectedWindow {
+				t.Errorf("%s: Expected window %d, got %d", label, c.expectedWindow, tConn.window)
+			}
+		}()
 	}
 }
 
@@ -950,40 +958,42 @@ func TestConn_ackData(t *testing.T) {
 	}
 
 	for label, c := range cases {
-		tConn, sAddr, cNetConn, closer := testConns(t)
-		defer closer()
-		tConn.rx = c.rx
-		tConn.timeout = c.timeout
-		tConn.block = c.block
-		tConn.window = c.window
-		tConn.windowsize = c.windowsize
-		tConn.catchup = c.catchup
+		func() {
+			tConn, sAddr, cNetConn, closer := testConns(t)
+			defer closer()
+			tConn.rx = c.rx
+			tConn.timeout = c.timeout
+			tConn.block = c.block
+			tConn.window = c.window
+			tConn.windowsize = c.windowsize
+			tConn.catchup = c.catchup
 
-		err := tConn.ackData()
-		// Error
-		if err != nil {
-			if ok, _ := regexp.MatchString(c.expectedError, err.Error()); !ok {
-				t.Errorf("%s: expected error %q, got %q", label, c.expectedError, err.Error())
+			err := tConn.ackData()
+			// Error
+			if err != nil {
+				if ok, _ := regexp.MatchString(c.expectedError, err.Error()); !ok {
+					t.Errorf("%s: expected error %q, got %q", label, c.expectedError, err.Error())
+				}
 			}
-		}
 
-		if c.connFunc != nil {
-			c.connFunc(label, cNetConn, sAddr)
-		}
+			if c.connFunc != nil {
+				c.connFunc(label, cNetConn, sAddr)
+			}
 
-		// Block number
-		if tConn.block != c.expectedBlock {
-			t.Errorf("%s: Expected block %d, got %d", label, c.expectedBlock, tConn.block)
-		}
+			// Block number
+			if tConn.block != c.expectedBlock {
+				t.Errorf("%s: Expected block %d, got %d", label, c.expectedBlock, tConn.block)
+			}
 
-		// Window number
-		if tConn.window != c.expectedWindow {
-			t.Errorf("%s: Expected window %d, got %d", label, c.expectedWindow, tConn.window)
-		}
-		// Catchup
-		if tConn.catchup != c.expectCatchup {
-			t.Errorf("%s: Expected catchup %t, but it wasn't", label, c.expectCatchup)
-		}
+			// Window number
+			if tConn.window != c.expectedWindow {
+				t.Errorf("%s: Expected window %d, got %d", label, c.expectedWindow, tConn.window)
+			}
+			// Catchup
+			if tConn.catchup != c.expectCatchup {
+				t.Errorf("%s: Expected catchup %t, but it wasn't", label, c.expectCatchup)
+			}
+		}()
 	}
 }
 
@@ -1291,43 +1301,45 @@ func TestConn_write(t *testing.T) {
 	}
 
 	for label, c := range cases {
-		tConn, sAddr, cNetConn, closer := testConns(t)
-		defer closer()
-		if c.rx != nil {
-			tConn.rx = c.rx()
-		}
-		tConn.blksize = c.blksize
-		tConn.window = c.window
-		tConn.windowsize = c.windowsize
-		tConn.optionsParsed = c.optionsParsed
-		tConn.timeout = c.timeout
-		tConn.buf = make([]byte, c.blksize)
-		tConn.txBuf = newRingBuffer(int(c.windowsize), int(c.blksize))
-		tConn.err = c.connErr
-
-		var wg sync.WaitGroup
-		if c.connFunc != nil {
-			wg.Add(1)
-			go func() {
-				c.connFunc(label, cNetConn, sAddr)
-				wg.Done()
-			}()
-		}
-
-		count, err := tConn.write(c.bytes)
-		wg.Wait()
-
-		// Error
-		if err != nil {
-			if ok, _ := regexp.MatchString(c.expectedError, err.Error()); !ok {
-				t.Errorf("%s: expected error %q, got %q", label, c.expectedError, err.Error())
+		func() {
+			tConn, sAddr, cNetConn, closer := testConns(t)
+			defer closer()
+			if c.rx != nil {
+				tConn.rx = c.rx()
 			}
-		}
+			tConn.blksize = c.blksize
+			tConn.window = c.window
+			tConn.windowsize = c.windowsize
+			tConn.optionsParsed = c.optionsParsed
+			tConn.timeout = c.timeout
+			tConn.buf = make([]byte, c.blksize)
+			tConn.txBuf = newRingBuffer(int(c.windowsize), int(c.blksize))
+			tConn.err = c.connErr
 
-		// Count
-		if c.expectedCount != count {
-			t.Errorf("%s: expected count %d, got %d", label, c.expectedCount, count)
-		}
+			var wg sync.WaitGroup
+			if c.connFunc != nil {
+				wg.Add(1)
+				go func() {
+					c.connFunc(label, cNetConn, sAddr)
+					wg.Done()
+				}()
+			}
+
+			count, err := tConn.write(c.bytes)
+			wg.Wait()
+
+			// Error
+			if err != nil {
+				if ok, _ := regexp.MatchString(c.expectedError, err.Error()); !ok {
+					t.Errorf("%s: expected error %q, got %q", label, c.expectedError, err.Error())
+				}
+			}
+
+			// Count
+			if c.expectedCount != count {
+				t.Errorf("%s: expected count %d, got %d", label, c.expectedCount, count)
+			}
+		}()
 	}
 }
 
@@ -1420,33 +1432,35 @@ func TestConn_Close(t *testing.T) {
 	}
 
 	for label, c := range cases {
-		tConn, sAddr, cNetConn, closer := testConns(t)
-		defer closer()
-		tConn.blksize = c.blksize
-		tConn.timeout = c.timeout
-		tConn.buf = make([]byte, c.blksize)
-		tConn.txBuf = newRingBuffer(1, int(c.blksize))
-		tConn.txBuf.Write(c.bytes)
-		tConn.err = c.connErr
+		func() {
+			tConn, sAddr, cNetConn, closer := testConns(t)
+			defer closer()
+			tConn.blksize = c.blksize
+			tConn.timeout = c.timeout
+			tConn.buf = make([]byte, c.blksize)
+			tConn.txBuf = newRingBuffer(1, int(c.blksize))
+			tConn.txBuf.Write(c.bytes)
+			tConn.err = c.connErr
 
-		var wg sync.WaitGroup
-		if c.connFunc != nil {
-			wg.Add(1)
-			go func() {
-				c.connFunc(label, cNetConn, sAddr)
-				wg.Done()
-			}()
-		}
-
-		err := tConn.Close()
-		wg.Wait()
-
-		// Error
-		if err != nil {
-			if ok, _ := regexp.MatchString(c.expectedError, err.Error()); !ok {
-				t.Errorf("%s: expected error %q, got %q", label, c.expectedError, err.Error())
+			var wg sync.WaitGroup
+			if c.connFunc != nil {
+				wg.Add(1)
+				go func() {
+					c.connFunc(label, cNetConn, sAddr)
+					wg.Done()
+				}()
 			}
-		}
+
+			err := tConn.Close()
+			wg.Wait()
+
+			// Error
+			if err != nil {
+				if ok, _ := regexp.MatchString(c.expectedError, err.Error()); !ok {
+					t.Errorf("%s: expected error %q, got %q", label, c.expectedError, err.Error())
+				}
+			}
+		}()
 	}
 }
 
@@ -1542,38 +1556,40 @@ func TestConn_read(t *testing.T) {
 	}
 
 	for label, c := range cases {
-		tConn, sAddr, cNetConn, closer := testConns(t)
-		defer closer()
-		tConn.optionsParsed = c.optionsParsed
-		tConn.blksize = c.blksize
-		tConn.timeout = c.timeout
-		tConn.windowsize = c.windowsize
-		tConn.buf = make([]byte, c.blksize+4)
-		tConn.err = c.connErr
+		func() {
+			tConn, sAddr, cNetConn, closer := testConns(t)
+			defer closer()
+			tConn.optionsParsed = c.optionsParsed
+			tConn.blksize = c.blksize
+			tConn.timeout = c.timeout
+			tConn.windowsize = c.windowsize
+			tConn.buf = make([]byte, c.blksize+4)
+			tConn.err = c.connErr
 
-		var wg sync.WaitGroup
-		if c.connFunc != nil {
-			wg.Add(1)
-			go func() {
-				c.connFunc(label, cNetConn, sAddr)
-				wg.Done()
-			}()
-		}
-
-		read, err := tConn.read(c.bytes)
-		wg.Wait()
-
-		// Error
-		if err != nil {
-			if ok, _ := regexp.MatchString(c.expectedError, err.Error()); !ok {
-				t.Errorf("%s: expected error %q, got %q", label, c.expectedError, err.Error())
+			var wg sync.WaitGroup
+			if c.connFunc != nil {
+				wg.Add(1)
+				go func() {
+					c.connFunc(label, cNetConn, sAddr)
+					wg.Done()
+				}()
 			}
-		}
 
-		// Read Count
-		if c.expectedRead != read {
-			t.Errorf("%s: Expected read bytes to be %d, but it was %d", label, c.expectedRead, read)
-		}
+			read, err := tConn.read(c.bytes)
+			wg.Wait()
+
+			// Error
+			if err != nil {
+				if ok, _ := regexp.MatchString(c.expectedError, err.Error()); !ok {
+					t.Errorf("%s: expected error %q, got %q", label, c.expectedError, err.Error())
+				}
+			}
+
+			// Read Count
+			if c.expectedRead != read {
+				t.Errorf("%s: Expected read bytes to be %d, but it was %d", label, c.expectedRead, read)
+			}
+		}()
 	}
 }
 
@@ -1610,31 +1626,33 @@ func TestConn_sendError(t *testing.T) {
 	}
 
 	for label, c := range cases {
-		tConn, _, cNetConn, closer := testConns(t)
-		defer closer()
-		tConn.blksize = c.blksize
-		tConn.timeout = c.timeout
-		tConn.buf = make([]byte, c.blksize+4)
+		func() {
+			tConn, _, cNetConn, closer := testConns(t)
+			defer closer()
+			tConn.blksize = c.blksize
+			tConn.timeout = c.timeout
+			tConn.buf = make([]byte, c.blksize+4)
 
-		tConn.sendError(c.code, c.msg)
+			tConn.sendError(c.code, c.msg)
 
-		// Receive Error
-		cNetConn.SetReadDeadline(time.Now().Add(c.timeout))
-		n, _, err := cNetConn.ReadFrom(dg.buf)
-		if err != nil {
-			t.Fatal(err)
-		}
-		dg.offset = n
+			// Receive Error
+			cNetConn.SetReadDeadline(time.Now().Add(c.timeout))
+			n, _, err := cNetConn.ReadFrom(dg.buf)
+			if err != nil {
+				t.Fatal(err)
+			}
+			dg.offset = n
 
-		// Error Code
-		if c.expectedCode != dg.errorCode() {
-			t.Errorf("%s: expected errorCode %s, got %s", label, c.expectedCode, dg.errorCode())
-		}
+			// Error Code
+			if c.expectedCode != dg.errorCode() {
+				t.Errorf("%s: expected errorCode %s, got %s", label, c.expectedCode, dg.errorCode())
+			}
 
-		// Error Message
-		if c.expectedError != dg.errMsg() {
-			t.Errorf("%s: expected message %q, got %q", label, c.expectedError, dg.errMsg())
-		}
+			// Error Message
+			if c.expectedError != dg.errMsg() {
+				t.Errorf("%s: expected message %q, got %q", label, c.expectedError, dg.errMsg())
+			}
+		}()
 	}
 }
 
