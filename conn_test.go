@@ -676,9 +676,7 @@ func TestConn_sendReadRequest(t *testing.T) {
 			}
 
 			// Flush buffer
-			if tConn.netasciiEnc != nil {
-				tConn.netasciiEnc.Flush()
-			}
+			tConn.Close()
 
 			if buf := tConn.rxBuf.String(); buf != c.expectedBuf {
 				t.Errorf("expected buf to contain %q, but it was %q", c.expectedBuf, buf)
@@ -1350,7 +1348,7 @@ func TestConn_write(t *testing.T) {
 			optionsParsed: true,
 
 			expectedCount: 1024,
-			expectedError: "^receiving ACK after writing data: network read failed",
+			expectedError: "receiving ACK after writing data: network read failed",
 		},
 		{
 			name:          "conn err",
@@ -1372,8 +1370,8 @@ func TestConn_write(t *testing.T) {
 			},
 			connErr: errors.New("conn error"),
 
-			expectedCount: 1024,
-			expectedError: "writing data: conn error",
+			expectedCount: 0,
+			expectedError: "conn error",
 		},
 		{
 			name:          "writeSetup fails",
@@ -1405,7 +1403,7 @@ func TestConn_write(t *testing.T) {
 			tConn.err = c.connErr
 
 			errChan := testConnFunc(cNetConn, sAddr, c.connFunc)
-			count, err := tConn.write(c.bytes)
+			count, err := tConn.Write(c.bytes)
 			if err := <-errChan; err != nil {
 				t.Fatal(err)
 			}
@@ -1641,7 +1639,7 @@ func TestConn_read(t *testing.T) {
 			tConn.err = c.connErr
 
 			errChan := testConnFunc(cNetConn, sAddr, c.connFunc)
-			read, err := tConn.read(c.bytes)
+			read, err := tConn.Read(c.bytes)
 			if err := <-errChan; err != nil {
 				t.Fatal(err)
 			}

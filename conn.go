@@ -123,10 +123,13 @@ type conn struct {
 	tx datagram // Constructs outgoing datagrams
 	rx datagram // Hold and parse current incoming datagram
 
-	// netascii encoder/decoder wrap Read/Write methods when transfer
-	// is in netascii mode
-	netasciiEnc *netascii.Writer
-	netasciiRdr *netascii.Reader
+	// // netascii encoder/decoder wrap Read/Write methods when transfer
+	// // is in netascii mode
+	// netasciiEnc *netascii.Writer
+	// netasciiRdr *netascii.Reader
+
+	writer io.Writer
+	reader io.Reader
 
 	// Indicates the transfer is complete
 	done bool
@@ -146,7 +149,7 @@ func (c *conn) sendWriteRequest(filename string, opts map[string]string) error {
 	}
 
 	// Should have received OACK if server supports options, or DATA if not
-	switch op := c.rx.opcode(); op {
+	switch c.rx.opcode() {
 	case opCodeOACK, opCodeACK:
 		// Got OACK, parse options
 		if err := c.writeSetup(); err != nil {
@@ -176,7 +179,7 @@ func (c *conn) sendReadRequest(filename string, opts map[string]string) error {
 	}
 
 	// Should have received OACK if server supports options, or DATA if not
-	switch op := c.rx.opcode(); op {
+	switch c.rx.opcode() {
 	case opCodeOACK:
 		// Got OACK, parse options
 		if err := c.readSetup(); err != nil {
@@ -263,16 +266,15 @@ func (c *conn) Write(p []byte) (int, error) {
 		return 0, wrapError(c.err, "checking conn err before Write")
 	}
 
-	if c.mode == ModeNetASCII {
-		if c.netasciiEnc == nil {
-			c.netasciiEnc = netascii.NewWriter(writerFunc(c.write))
+	if c.writer == nil {
+		c.writer = writerFunc(c.write)
+		if c.mode == ModeNetASCII {
+			c.writer = netascii.NewWriter(c.writer)
 		}
-		n, err := c.netasciiEnc.Write(p)
-		return n, wrapError(err, "writing through netascii encoder")
 	}
 
-	n, err := c.write(p)
-	return n, wrapError(err, "writing through standard writer")
+	n, err := c.writer.Write(p)
+	return n, wrapError(err, "writing")
 }
 
 // writeSetup parses options and sets up buffers before
@@ -388,25 +390,27 @@ func (c *conn) writeData() error {
 //
 // If mode is ModeNetASCII, read() is wrapped with netascii.ReadDecoder
 func (c *conn) Read(b []byte) (int, error) {
-	// Can't read if an error has been sent/received
 	if c.err != nil {
+		// Can't read if an error has been sent/received
 		return 0, wrapError(c.err, "checking conn error before Read")
 	}
 
-	if c.mode == ModeNetASCII {
-		if c.netasciiRdr == nil {
-			c.netasciiRdr = netascii.NewReader(readerFunc(c.read))
+	if c.reader == nil {
+		c.reader = readerFunc(c.read)
+		if c.mode == ModeNetASCII {
+			c.reader = netascii.NewReader(c.reader)
 		}
-		n, err := c.netasciiRdr.Read(b)
-		if err != io.EOF {
-			err = wrapError(err, "Read from netascii decoder")
-		}
-		return n, err
 	}
 
-	n, err := c.read(b)
+	if !c.optionsParsed {
+		if err := c.readSetup(); err != nil {
+			return 0, wrapError(err, "parsing options before initial read")
+		}
+	}
+
+	n, err := c.reader.Read(b)
 	if err != io.EOF {
-		err = wrapError(err, "Read from standard reader")
+		err = wrapError(err, "read")
 	}
 	return n, err
 }
@@ -420,8 +424,7 @@ func (c *conn) readSetup() error {
 	}
 
 	// Set buf size
-	needed := int(c.blksize + 4)
-	if len(c.rx.buf) != needed {
+	if needed := int(c.blksize + 4); len(c.rx.buf) != needed {
 		c.rx.buf = make([]byte, needed)
 	}
 
@@ -442,12 +445,6 @@ func (c *conn) readSetup() error {
 // read reads data from netConn until p is full or the connection is
 // complete.
 func (c *conn) read(p []byte) (int, error) {
-	if !c.optionsParsed {
-		if err := c.readSetup(); err != nil {
-			return 0, wrapError(err, "parsing options before initial read")
-		}
-	}
-
 	for l := len(p); c.rxBuf.Len() < l && !c.done; {
 		// Read next datagram
 		if err := c.readData(); err != nil {
@@ -474,16 +471,16 @@ func (c *conn) read(p []byte) (int, error) {
 	}
 
 	// Read buffered data into p
-	read, err := c.rxBuf.Read(p)
+	n, err := c.rxBuf.Read(p)
 	if err != nil && err != io.EOF { // Ignore EOF from bytes.Buffer
-		return read, wrapError(err, "reading from rxBuf after read")
+		return n, wrapError(err, "reading from rxBuf after read")
 	}
 	// If done, signal that there's nothing more to read by io.EOF
 	if c.done && c.rxBuf.Len() == 0 {
-		return read, io.EOF
+		return n, io.EOF
 	}
 
-	return read, nil
+	return n, nil
 }
 
 // readDatagram reads a single datagram into rx
@@ -600,10 +597,12 @@ func (c *conn) Close() (err error) {
 	}
 
 	// netasciiEnc needs to be flushed if it's in use
-	if c.netasciiEnc != nil {
-		c.log.trace("Flushing netascii encoder")
-		if err := c.netasciiEnc.Flush(); err != nil {
-			return wrapError(err, "flushing netascii encoder before Close")
+	if flusher, ok := c.writer.(interface {
+		Flush() error
+	}); ok {
+		c.log.trace("flushing writer")
+		if err := flusher.Flush(); err != nil {
+			return wrapError(err, "flushing writer")
 		}
 	}
 
@@ -619,7 +618,7 @@ func (c *conn) Close() (err error) {
 				// Recheck data, window could have been missed
 				if c.txBuf.Len() >= int(c.blksize) {
 					c.log.trace("%d", c.txBuf.Len())
-					c.write([]byte{})
+					c.writer.Write([]byte{})
 					continue
 				}
 				if c.txBuf.Len() > 0 {
