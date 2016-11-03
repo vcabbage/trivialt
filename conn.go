@@ -137,8 +137,11 @@ type conn struct {
 	// Indicates an ERROR has been sent or received
 	err error
 
-	p []byte
-	n int
+	p        []byte
+	n        int
+	tries    int
+	closing  bool
+	lastData int
 }
 
 // sendWriteRequest sends WRQ to server and negotiates transfer options
@@ -350,66 +353,51 @@ func (c *conn) write() stateType {
 		c.n, c.err = read, wrapError(err, "writing data to txBuf before write")
 		return nil
 	}
-
-	for c.txBuf.Len() >= int(c.blksize) {
-		if err := c.writeData(); err != nil {
-			c.n, c.err = read, wrapError(err, "writing data")
-			return nil
-		}
-		// Increment the window
-		c.window++
-
-		// Continue on if we haven't reached the windowsize
-		if c.window < c.windowsize {
-			continue
-		}
-
-		// Reset window
-		c.window = 0
-
-		// Get ACK
-		retries := 0
-		for {
-			c.getAck() // TODO: state
-			if c.err == nil {
-				break
-			}
-
-			// Return if the transfer has erred
-			if c.err != nil {
-				c.n, c.err = read, wrapError(c.err, "writing data")
-				return nil
-			}
-
-			// Retry until maxRetransmit
-			retries++
-			c.log.debug("Error receiving ACK (retry %d): %v\n", retries, err)
-			if retries > c.retransmit {
-				c.log.debug("Max retries exceeded")
-				c.n, c.err = read, wrapError(c.err, "receiving ACK after writing data")
-				return c.sendError(ErrCodeNotDefined, "max retries reached")
-			}
-		}
-	}
-
 	c.n = read
-	return nil
+
+	return c.writeData
 }
 
 // writeData writes a single DATA datagram
-func (c *conn) writeData() error {
+func (c *conn) writeData() stateType {
+	if c.closing && c.lastData < int(c.blksize) {
+		return nil
+	}
+	if c.txBuf.Len() < int(c.blksize) && !c.closing {
+		return nil
+	}
+
 	c.block++
 
 	// Read data from txBuf
 	n, err := c.txBuf.Read(c.buf)
 	if err != nil && err != io.EOF {
-		return wrapError(err, "reading data from txBuf before writing to network")
+		c.err = wrapError(err, "reading data from txBuf before writing to network")
+		return nil
 	}
 	c.tx.writeData(c.block, c.buf[:n])
 
 	// Send w.tx datagram
 	c.log.trace("Sending block %d with %d bytes to %s\n", c.block, n, c.remoteAddr)
-	return wrapError(c.writeToNet(), "writing data to network")
+	err = c.writeToNet()
+	if err != nil {
+		c.err = wrapError(err, "writing data to network")
+		return nil
+	}
+	c.lastData = n
+
+	// Increment the window
+	c.window++
+
+	// Continue on if we haven't reached the windowsize
+	if c.window < c.windowsize {
+		return c.writeData
+	}
+
+	// Reset window
+	c.window = 0
+
+	return c.getAck
 }
 
 // Read implements io.Reader and wraps read()
@@ -600,19 +588,18 @@ func (c *conn) ackData() error {
 }
 
 // Close flushes any remaining data to be transferred and closes netConn
-func (c *conn) Close() (err error) {
+func (c *conn) Close() error {
 	c.log.debug("Closing connection to %s\n", c.remoteAddr)
 
 	if c.reqChan == nil {
 		defer func() {
 			// Close network even if another error occurs
-			//
-			cErr := c.netConn.Close()
-			if cErr != nil {
-				c.log.debug("error closing network connection:", cErr)
+			err := c.netConn.Close()
+			if err != nil {
+				c.log.debug("error closing network connection:", err)
 			}
-			if err == nil {
-				err = cErr
+			if c.err == nil {
+				c.err = err
 			}
 		}()
 	}
@@ -634,42 +621,11 @@ func (c *conn) Close() (err error) {
 
 	// Write any remaining data, or 0 length DATA to end transfer
 	if c.txBuf != nil {
-		for retries := 0; ; {
-			if err := c.writeData(); err != nil {
-				return wrapError(err, "writing final data before Close")
-			}
-
-			c.getAck() // TODO: Overwriting err, not good, fix. returns write or nil
-			if c.err == nil {
-				// Recheck data, window could have been missed
-				if c.txBuf.Len() >= int(c.blksize) {
-					c.log.trace("%d", c.txBuf.Len())
-					c.writer.Write([]byte{})
-					continue
-				}
-				if c.txBuf.Len() > 0 {
-					continue
-				}
-				break
-			}
-
-			// Return if the transfer has erred
-			if c.err != nil {
-				return wrapError(c.err, "checking conn error sending ACK for final data before Close")
-			}
-
-			// Retry until maxRetransmit
-			retries++
-			c.log.debug("Error receiving ACK (retry %d): %v\n", retries, err)
-			if retries > c.retransmit {
-				c.log.debug("Max retries exceeded")
-				c.sendError(ErrCodeNotDefined, "max retries reached")
-				return wrapError(err, "writing final data ACK before Close")
-			}
-		}
+		c.closing = true
+		c.Write([]byte{})
 	}
 
-	return nil
+	return c.err
 }
 
 // parseOACK parses the options from a datagram and returns the successfully
@@ -754,6 +710,12 @@ func (c *conn) sendAck(block uint16) error {
 // If the received ACK is for a previous block, indicating the receiver missed data,
 // it will rollback the transfer to the ACK'd block and reset the window.
 func (c *conn) getAck() stateType {
+	c.tries++
+	if c.tries > c.retransmit {
+		c.log.debug("Max retries exceeded")
+		return c.sendError(ErrCodeNotDefined, "max retries reached")
+	}
+
 	for {
 		c.log.trace("Waiting for ACK from %s\n", c.remoteAddr)
 		sAddr, err := c.readFromNet()
@@ -814,7 +776,8 @@ func (c *conn) getAck() stateType {
 		c.window = 0
 	}
 
-	return c.write
+	c.tries = 0
+	return c.writeData
 }
 
 // remoteError formats the error in rx, sets err and returns the error.
