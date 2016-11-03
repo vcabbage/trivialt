@@ -4,9 +4,10 @@
 
 package trivialt
 
-import "net"
-
-import "sync"
+import (
+	"net"
+	"sync"
+)
 
 // Server contains the configuration to run a TFTP server.
 //
