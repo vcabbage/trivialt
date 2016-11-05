@@ -206,9 +206,7 @@ func (s *Server) dispatchWriteRequest(addr *net.UDPAddr, buf []byte) {
 
 	// parse options to get size
 	c.log.trace("performing write setup")
-	if err := c.readSetup(); err != nil {
-		c.err = err
-	}
+	c.readSetup()
 
 	s.wh.ReceiveTFTP(w)
 }
