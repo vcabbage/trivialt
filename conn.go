@@ -788,7 +788,8 @@ func (c *conn) getAck() stateType {
 	if rxBlock := c.rx.block(); rxBlock != c.block {
 		if rxBlock > c.block {
 			// Out of order ACKs can cause this scenario, ignore the ACK
-			return nil
+			c.log.debug("Received ACK > current block, ignoring.")
+			return c.getAck
 		}
 		c.log.debug("Expected ACK for block %d, got %d. Resetting to block %d.", c.block, rxBlock, rxBlock)
 		c.txBuf.UnreadSlots(int(c.block - rxBlock))
