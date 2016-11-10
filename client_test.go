@@ -910,7 +910,7 @@ func TestClient_parseURL(t *testing.T) {
 	}
 }
 
-func newTestServer(t *testing.T, singlePort bool, rh ReadHandlerFunc, wh WriteHandlerFunc) (string, int, func()) {
+func newTestServer(t tester, singlePort bool, rh ReadHandlerFunc, wh WriteHandlerFunc) (string, int, func()) {
 	s, err := NewServer("127.0.0.1:0", ServerSinglePort(singlePort))
 
 	if err != nil {
@@ -940,7 +940,11 @@ func newTestServer(t *testing.T, singlePort bool, rh ReadHandlerFunc, wh WriteHa
 	return ip, addr.Port, closer
 }
 
-func getTestData(t *testing.T, name string) []byte {
+type tester interface {
+	Fatalf(string, ...interface{})
+}
+
+func getTestData(t tester, name string) []byte {
 	path := filepath.Join("testdata", name)
 
 	data, err := ioutil.ReadFile(path)
