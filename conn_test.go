@@ -11,6 +11,7 @@ import (
 	"net"
 	"reflect"
 	"regexp"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -497,10 +498,12 @@ func TestConn_sendReadRequest(t *testing.T) {
 	data := getTestData(t, "1MB-random")
 
 	cases := []struct {
-		name     string
-		timeout  time.Duration
-		mode     TransferMode
-		connFunc func(*net.UDPConn, *net.UDPAddr) error
+		name        string
+		timeout     time.Duration
+		mode        TransferMode
+		connFunc    func(*net.UDPConn, *net.UDPAddr) error
+		windowsOnly bool
+		nixOnly     bool
 
 		skip string
 
@@ -553,8 +556,26 @@ func TestConn_sendReadRequest(t *testing.T) {
 				tDG.writeData(1, []byte("data\r\ndata"))
 				return testWriteConn(t, conn, sAddr, tDG)
 			},
+			nixOnly: true,
 
 			expectedBuf:        "data\ndata", // Writes in as netascii, read out normal
+			expectedBlksize:    512,
+			expectedTimeout:    time.Second,
+			expectedWindowsize: 1,
+			expectedBufLen:     516,
+			expectedError:      "^$",
+		},
+		{
+			name:    "DATA, netascii",
+			timeout: time.Second,
+			mode:    ModeNetASCII,
+			connFunc: func(conn *net.UDPConn, sAddr *net.UDPAddr) error {
+				tDG.writeData(1, []byte("data\r\ndata"))
+				return testWriteConn(t, conn, sAddr, tDG)
+			},
+			windowsOnly: true,
+
+			expectedBuf:        "data\r\ndata", // Writes in as netascii, read out normal
 			expectedBlksize:    512,
 			expectedTimeout:    time.Second,
 			expectedWindowsize: 1,
@@ -659,6 +680,12 @@ func TestConn_sendReadRequest(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			if c.skip != "" {
 				t.Skip(c.skip)
+			}
+			if c.windowsOnly && runtime.GOOS != "windows" {
+				t.Skip("widows only")
+			}
+			if c.nixOnly && runtime.GOOS == "windows" {
+				t.Skip("*nix only")
 			}
 
 			tConn, sAddr, cNetConn, closer := testConns(t)
