@@ -123,7 +123,6 @@ func (s *Server) Serve(conn *net.UDPConn) error {
 			}
 			copy(req.pkt, buf)
 			s.dispatchChan <- req
-
 		}
 	}
 }

@@ -1533,7 +1533,7 @@ func TestConn_Close(t *testing.T) {
 			timeout: time.Millisecond * 100,
 			blksize: 512,
 
-			expectedError: "^max retries reached$",
+			expectedError: "^reading ack: max retries reached$",
 		},
 	}
 
@@ -1549,7 +1549,6 @@ func TestConn_Close(t *testing.T) {
 			tConn.writer = tConn.txBuf
 			tConn.err = c.connErr
 			tConn.optionsParsed = true
-			tConn.lastData = c.blksize
 
 			errChan := testConnFunc(cNetConn, sAddr, c.connFunc)
 			err := tConn.Close()
