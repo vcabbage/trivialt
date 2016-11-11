@@ -116,6 +116,10 @@ func (s *Server) Serve(conn *net.UDPConn) error {
 				return wrapError(err, "reading from conn")
 			}
 
+			if n < 2 {
+				continue // Must be at least 2 bytes to read opcode
+			}
+
 			// Make a copy of the received data
 			req := &request{
 				addr: addr,
