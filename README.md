@@ -1,4 +1,10 @@
-# **trivialt**
+# **Deprecation**
+
+**The Go library portion of this project has moved to [pack.ag/tftp](https://pack.ag/tftp).**
+
+This code remains here as to not break any projects depending on it.
+
+# trivialt
 
 [![Go Report Card](https://goreportcard.com/badge/vcabbage/trivialt)](https://goreportcard.com/report/vcabbage/trivialt)
 [![Coverage Status](https://coveralls.io/repos/github/vcabbage/trivialt/badge.svg?branch=master)](https://coveralls.io/github/vcabbage/trivialt?branch=master)
